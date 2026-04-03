@@ -6,6 +6,9 @@ import io
 import re
 import time
 import urllib.parse
+import pickle
+import json
+from pathlib import Path
 import requests
 from bs4 import BeautifulSoup
 from openai import OpenAI
@@ -33,48 +36,88 @@ MENU_ITEMS = {
 }
 
 # ──────────────────────────────────────────────
-# session_state 초기화
+# 캐시 디렉토리 (디스크 영속성)
+# ──────────────────────────────────────────────
+CACHE_DIR = Path(__file__).parent / ".cache"
+CACHE_DIR.mkdir(exist_ok=True)
+
+def _save_pickle(name, obj):
+    with open(CACHE_DIR / f"{name}.pkl", "wb") as f:
+        pickle.dump(obj, f)
+
+def _load_pickle(name, default=None):
+    p = CACHE_DIR / f"{name}.pkl"
+    if p.exists():
+        try:
+            with open(p, "rb") as f:
+                return pickle.load(f)
+        except Exception:
+            pass
+    return default
+
+def save_all_cache():
+    """현재 session_state의 주요 데이터를 디스크에 저장."""
+    _save_pickle("naver_data", st.session_state.naver_data)
+    _save_pickle("google_data", st.session_state.google_data)
+    _save_pickle("naver_mapping_rules", st.session_state.naver_mapping_rules)
+    _save_pickle("google_mapping_rules", st.session_state.google_mapping_rules)
+    _save_pickle("campaign_categories", st.session_state.campaign_categories)
+    _save_pickle("budgets", st.session_state.budgets)
+    _save_pickle("device_ratios", st.session_state.device_ratios)
+
+# ──────────────────────────────────────────────
+# session_state 초기화 (캐시에서 복원)
 # ──────────────────────────────────────────────
 if "campaign_categories" not in st.session_state:
-    st.session_state.campaign_categories = ["브랜드", "신용카드", "체크카드", "대출", "보험"]
+    st.session_state.campaign_categories = _load_pickle(
+        "campaign_categories", ["브랜드", "신용카드", "체크카드", "대출", "보험"]
+    )
 
 if "naver_data" not in st.session_state:
-    st.session_state.naver_data = None
+    st.session_state.naver_data = _load_pickle("naver_data", None)
 
 if "google_data" not in st.session_state:
-    st.session_state.google_data = None
+    st.session_state.google_data = _load_pickle("google_data", None)
 
 if "budgets" not in st.session_state:
-    st.session_state.budgets = {}  # key: "YYYY-MM_매체_캠페인구분" → value: int
+    st.session_state.budgets = _load_pickle("budgets", {})
 
 if "device_ratios" not in st.session_state:
-    st.session_state.device_ratios = {}  # key: "YYYY-MM_캠페인구분" → {"PC": int, "MO": int}
+    st.session_state.device_ratios = _load_pickle("device_ratios", {})
 
 if "naver_mapping_rules" not in st.session_state:
-    st.session_state.naver_mapping_rules = pd.DataFrame([
-        {"캠페인_포함": "브랜드키워드", "광고그룹_포함": "",              "캠페인구분": "브랜드"},
-        {"캠페인_포함": "고객서비스",   "광고그룹_포함": "",              "캠페인구분": "브랜드"},
-        {"캠페인_포함": "신한법인",     "광고그룹_포함": "",              "캠페인구분": "브랜드"},
-        {"캠페인_포함": "신한쏠페이",   "광고그룹_포함": "",              "캠페인구분": "브랜드"},
-        {"캠페인_포함": "기타서비스",   "광고그룹_포함": "",              "캠페인구분": "브랜드"},
-        {"캠페인_포함": "나라사랑",     "광고그룹_포함": "",              "캠페인구분": "신용카드"},
-        {"캠페인_포함": "마이신한포인트","광고그룹_포함": "",             "캠페인구분": "브랜드"},
-        {"캠페인_포함": "BizPlan",     "광고그룹_포함": "",              "캠페인구분": "신용카드"},
-        {"캠페인_포함": "BSA",         "광고그룹_포함": "",              "캠페인구분": "브랜드"},
-        {"캠페인_포함": "소상공인",     "광고그룹_포함": "",              "캠페인구분": "브랜드"},
-        {"캠페인_포함": "",            "광고그룹_포함": "대출",          "캠페인구분": "대출"},
-        {"캠페인_포함": "",            "광고그룹_포함": "신한카드",      "캠페인구분": "브랜드"},
-    ])
+    _cached_naver = _load_pickle("naver_mapping_rules", None)
+    if _cached_naver is not None:
+        st.session_state.naver_mapping_rules = _cached_naver
+    else:
+        st.session_state.naver_mapping_rules = pd.DataFrame([
+            {"캠페인_포함": "브랜드키워드", "광고그룹_포함": "",              "캠페인구분": "브랜드"},
+            {"캠페인_포함": "고객서비스",   "광고그룹_포함": "",              "캠페인구분": "브랜드"},
+            {"캠페인_포함": "신한법인",     "광고그룹_포함": "",              "캠페인구분": "브랜드"},
+            {"캠페인_포함": "신한쏠페이",   "광고그룹_포함": "",              "캠페인구분": "브랜드"},
+            {"캠페인_포함": "기타서비스",   "광고그룹_포함": "",              "캠페인구분": "브랜드"},
+            {"캠페인_포함": "나라사랑",     "광고그룹_포함": "",              "캠페인구분": "신용카드"},
+            {"캠페인_포함": "마이신한포인트","광고그룹_포함": "",             "캠페인구분": "브랜드"},
+            {"캠페인_포함": "BizPlan",     "광고그룹_포함": "",              "캠페인구분": "신용카드"},
+            {"캠페인_포함": "BSA",         "광고그룹_포함": "",              "캠페인구분": "브랜드"},
+            {"캠페인_포함": "소상공인",     "광고그룹_포함": "",              "캠페인구분": "브랜드"},
+            {"캠페인_포함": "",            "광고그룹_포함": "대출",          "캠페인구분": "대출"},
+            {"캠페인_포함": "",            "광고그룹_포함": "신한카드",      "캠페인구분": "브랜드"},
+        ])
 
 if "google_mapping_rules" not in st.session_state:
-    st.session_state.google_mapping_rules = pd.DataFrame([
-        {"캠페인_포함": "브랜드키워드", "광고그룹_포함": "",              "캠페인구분": "브랜드"},
-        {"캠페인_포함": "고객서비스",   "광고그룹_포함": "",              "캠페인구분": "브랜드"},
-        {"캠페인_포함": "신한쏠페이",   "광고그룹_포함": "",              "캠페인구분": "브랜드"},
-        {"캠페인_포함": "나라사랑",     "광고그룹_포함": "",              "캠페인구분": "신용카드"},
-        {"캠페인_포함": "소상공인",     "광고그룹_포함": "",              "캠페인구분": "브랜드"},
-        {"캠페인_포함": "신한카드법인", "광고그룹_포함": "",              "캠페인구분": "브랜드"},
-    ])
+    _cached_google = _load_pickle("google_mapping_rules", None)
+    if _cached_google is not None:
+        st.session_state.google_mapping_rules = _cached_google
+    else:
+        st.session_state.google_mapping_rules = pd.DataFrame([
+            {"캠페인_포함": "브랜드키워드", "광고그룹_포함": "",              "캠페인구분": "브랜드"},
+            {"캠페인_포함": "고객서비스",   "광고그룹_포함": "",              "캠페인구분": "브랜드"},
+            {"캠페인_포함": "신한쏠페이",   "광고그룹_포함": "",              "캠페인구분": "브랜드"},
+            {"캠페인_포함": "나라사랑",     "광고그룹_포함": "",              "캠페인구분": "신용카드"},
+            {"캠페인_포함": "소상공인",     "광고그룹_포함": "",              "캠페인구분": "브랜드"},
+            {"캠페인_포함": "신한카드법인", "광고그룹_포함": "",              "캠페인구분": "브랜드"},
+        ])
 
 # ──────────────────────────────────────────────
 # 유틸리티 함수
@@ -324,6 +367,7 @@ with st.sidebar:
         if st.button("➕ 추가", width="stretch"):
             if new_category and new_category not in st.session_state.campaign_categories:
                 st.session_state.campaign_categories.append(new_category)
+                save_all_cache()
                 st.success(f"'{new_category}' 추가 완료")
                 st.rerun()
             elif new_category in st.session_state.campaign_categories:
@@ -337,6 +381,7 @@ with st.sidebar:
             col_name.write(f"{i+1}. {cat}")
             if col_btn.button("✖", key=f"del_cat_{i}"):
                 st.session_state.campaign_categories.remove(cat)
+                save_all_cache()
                 st.rerun()
 
     # ── 네이버 SA 캠페인 구분 매핑 규칙 ──
@@ -359,6 +404,7 @@ with st.sidebar:
         )
         if st.button("💾 네이버 매핑 저장", width="stretch"):
             st.session_state.naver_mapping_rules = edited_naver_rules.copy()
+            save_all_cache()
             st.toast("✅ 네이버 매핑 규칙이 저장되었습니다.")
             st.rerun()
 
@@ -382,6 +428,7 @@ with st.sidebar:
         )
         if st.button("💾 구글 매핑 저장", width="stretch"):
             st.session_state.google_mapping_rules = edited_google_rules.copy()
+            save_all_cache()
             st.toast("✅ 구글 매핑 규칙이 저장되었습니다.")
             st.rerun()
 
@@ -413,6 +460,7 @@ with st.sidebar:
             raw = raw[mask]
             naver_keys = ["일별", "캠페인", "광고그룹", "키워드"]
             st.session_state.naver_data = merge_data(st.session_state.naver_data, raw, naver_keys)
+            save_all_cache()
             total = len(st.session_state.naver_data)
             st.success(f"네이버 데이터 누적 완료 (신규 {len(raw)}행 → 총 {total}행)")
         except Exception as e:
@@ -430,6 +478,7 @@ with st.sidebar:
             raw = raw[raw["캠페인"].str.contains("0.", na=False) & ~raw["캠페인"].str.contains("GSA", na=False)]
             google_keys = ["일", "캠페인", "광고그룹", "키워드"]
             st.session_state.google_data = merge_data(st.session_state.google_data, raw, google_keys)
+            save_all_cache()
             total = len(st.session_state.google_data)
             st.success(f"구글 데이터 누적 완료 (신규 {len(raw)}행 → 총 {total}행)")
         except Exception as e:
@@ -587,6 +636,7 @@ if menu_key == "요약 및 예산":
                     if total_r > 0:
                         st.caption(f"PC {pc_val/total_r:.0%} / MO {mo_val/total_r:.0%}")
 
+        save_all_cache()
         st.divider()
 
         # ── 피벗 테이블 ──

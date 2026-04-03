@@ -3,5 +3,7 @@ __pycache__/
 *.csv
 *.xlsx
 *.xls
+*.pkl
 .env
+.cache/
 .streamlit/secrets.toml
