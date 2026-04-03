@@ -510,7 +510,7 @@ if menu_key == "요약 및 예산":
         ym_key = f"{sel_year}-{sel_month:02d}"
         days_in_month = calendar.monthrange(sel_year, sel_month)[1]
         if sel_year == today.year and sel_month == today.month:
-            progress_rate = today.day / days_in_month
+            progress_rate = (today.day - 1) / days_in_month
         elif datetime.date(sel_year, sel_month, 1) < today:
             progress_rate = 1.0
         else:
@@ -1556,7 +1556,7 @@ elif menu_key == "주간 AI 코멘트":
         days_in_month = calendar.monthrange(ref_year, ref_month)[1]
         today = datetime.date.today()
         if today.year == ref_year and today.month == ref_month:
-            progress_rate = today.day / days_in_month
+            progress_rate = (today.day - 1) / days_in_month
         else:
             progress_rate = 1.0
         ym_key = f"{ref_year}-{ref_month:02d}"
