@@ -85,22 +85,28 @@ def _gh_get(path):
 def _gh_put(path, content_bytes, message="auto-save"):
     """GitHub에 파일을 생성/업데이트한다."""
     if not _GH_ENABLED:
-        return False
+        return False, "GitHub 미연결"
     url = f"https://api.github.com/repos/{_GH_REPO}/contents/{path}"
-    r = requests.get(url, headers=_GH_HEADERS, timeout=15)
-    body = {
-        "message": message,
-        "content": base64.b64encode(content_bytes).decode(),
-    }
-    if r.status_code == 200:
-        body["sha"] = r.json()["sha"]
-    resp = requests.put(url, headers=_GH_HEADERS, json=body, timeout=30)
-    return resp.status_code in (200, 201)
+    try:
+        r = requests.get(url, headers=_GH_HEADERS, timeout=15)
+        body = {
+            "message": message,
+            "content": base64.b64encode(content_bytes).decode(),
+        }
+        if r.status_code == 200:
+            body["sha"] = r.json()["sha"]
+        resp = requests.put(url, headers=_GH_HEADERS, json=body, timeout=60)
+        if resp.status_code in (200, 201):
+            return True, ""
+        return False, f"{path}: HTTP {resp.status_code} - {resp.text[:200]}"
+    except Exception as e:
+        return False, f"{path}: {e}"
 
 def _gh_save_data(name, obj):
     """pickle+base64로 GitHub에 저장."""
     data = pickle.dumps(obj)
-    return _gh_put(f"_persistence/{name}.pkl", data, f"save {name}")
+    ok, err = _gh_put(f"_persistence/{name}.pkl", data, f"save {name}")
+    return ok, err
 
 def _gh_load_data(name):
     """GitHub에서 pickle 데이터를 로드."""
@@ -121,17 +127,23 @@ def save_all_cache():
     _save_pickle("device_ratios", st.session_state.device_ratios)
     # GitHub (Cloud 영속성)
     if _GH_ENABLED:
-        gh_ok = True
+        errors = []
         for key in ["naver_data", "google_data", "naver_mapping_rules",
                      "google_mapping_rules", "campaign_categories", "budgets", "device_ratios"]:
             val = getattr(st.session_state, key, None)
-            if val is not None:
-                if not _gh_save_data(key, val):
-                    gh_ok = False
-        if gh_ok:
+            if val is None:
+                continue
+            if isinstance(val, pd.DataFrame) and val.empty:
+                continue
+            if isinstance(val, (dict, list)) and not val:
+                continue
+            ok, err = _gh_save_data(key, val)
+            if not ok:
+                errors.append(err)
+        if not errors:
             st.toast("☁️ GitHub 저장 완료")
         else:
-            st.toast("⚠️ GitHub 저장 일부 실패", icon="⚠️")
+            st.toast(f"⚠️ GitHub 저장 실패: {errors[0]}", icon="⚠️")
 
 def load_from_github():
     """GitHub에서 데이터 복원 (Cloud 리부트 후 첫 로드)."""
