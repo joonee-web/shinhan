@@ -426,10 +426,11 @@ def check_naver_ad_exposure(keyword, device="PC"):
     return "요청오류"
 
 
-PREP_VERSION = 2  # 주차 로직 변경 시 버전 올려 캐시 무효화
+PREP_VERSION = 3  # 주차 로직 변경 시 버전 올려 캐시 무효화
 if st.session_state.get("_prep_v") != PREP_VERSION:
     st.cache_data.clear()
     st.session_state._prep_v = PREP_VERSION
+    st.toast("🔄 주차 로직 업데이트 적용됨")
 
 @st.cache_data(show_spinner="네이버 데이터 처리 중...")
 def prepare_naver_data(df, mapping_rules_json, prep_version=PREP_VERSION):
