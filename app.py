@@ -23,6 +23,12 @@ st.set_page_config(
     layout="wide",
 )
 
+# ── 캐시 버전 관리 (주차 로직 등 변경 시 강제 무효화) ──
+_CACHE_VER = "v4"
+if st.session_state.get("_cache_ver") != _CACHE_VER:
+    st.cache_data.clear()
+    st.session_state["_cache_ver"] = _CACHE_VER
+
 # ──────────────────────────────────────────────
 # 메뉴 정의
 # ──────────────────────────────────────────────
@@ -426,11 +432,7 @@ def check_naver_ad_exposure(keyword, device="PC"):
     return "요청오류"
 
 
-PREP_VERSION = 3  # 주차 로직 변경 시 버전 올려 캐시 무효화
-if st.session_state.get("_prep_v") != PREP_VERSION:
-    st.cache_data.clear()
-    st.session_state._prep_v = PREP_VERSION
-    st.toast("🔄 주차 로직 업데이트 적용됨")
+PREP_VERSION = 4  # 주차 로직 변경 시 버전 올려 캐시 무효화
 
 @st.cache_data(show_spinner="네이버 데이터 처리 중...")
 def prepare_naver_data(df, mapping_rules_json, prep_version=PREP_VERSION):
