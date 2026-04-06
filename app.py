@@ -8,6 +8,7 @@ import time
 import urllib.parse
 import pickle
 import json
+import base64
 from pathlib import Path
 import requests
 from bs4 import BeautifulSoup
@@ -36,7 +37,7 @@ MENU_ITEMS = {
 }
 
 # ──────────────────────────────────────────────
-# 캐시 디렉토리 (디스크 영속성)
+# 캐시 디렉토리 (로컬 디스크 영속성)
 # ──────────────────────────────────────────────
 CACHE_DIR = Path(__file__).parent / ".cache"
 CACHE_DIR.mkdir(exist_ok=True)
@@ -55,8 +56,91 @@ def _load_pickle(name, default=None):
             pass
     return default
 
+# ──────────────────────────────────────────────
+# GitHub API 영속성 (Cloud 리부트 대응)
+# ──────────────────────────────────────────────
+def _gh_headers():
+    """GitHub API 인증 헤더. secrets에 GITHUB_TOKEN이 없으면 None."""
+    try:
+        token = st.secrets.get("GITHUB_TOKEN", "")
+    except Exception:
+        return None
+    if not token:
+        return None
+    return {"Authorization": f"token {token}", "Accept": "application/vnd.github+json"}
+
+def _gh_repo():
+    try:
+        return st.secrets.get("GITHUB_REPO", "joonee-web/shinhan")
+    except Exception:
+        return "joonee-web/shinhan"
+
+def _gh_get(path):
+    """GitHub에서 파일 내용과 SHA를 가져온다."""
+    headers = _gh_headers()
+    if not headers:
+        return None, None
+    url = f"https://api.github.com/repos/{_gh_repo()}/contents/{path}"
+    r = requests.get(url, headers=headers)
+    if r.status_code == 200:
+        data = r.json()
+        content = base64.b64decode(data["content"])
+        return content, data["sha"]
+    return None, None
+
+def _gh_put(path, content_bytes, message="auto-save"):
+    """GitHub에 파일을 생성/업데이트한다."""
+    headers = _gh_headers()
+    if not headers:
+        return False
+    url = f"https://api.github.com/repos/{_gh_repo()}/contents/{path}"
+    # 기존 파일 SHA 가져오기 (업데이트용)
+    r = requests.get(url, headers=headers)
+    body = {
+        "message": message,
+        "content": base64.b64encode(content_bytes).decode(),
+    }
+    if r.status_code == 200:
+        body["sha"] = r.json()["sha"]
+    resp = requests.put(url, headers=headers, json=body)
+    return resp.status_code in (200, 201)
+
+def _gh_save_json(name, obj):
+    """JSON 직렬화 가능한 객체를 GitHub에 저장."""
+    data = json.dumps(obj, ensure_ascii=False, default=str).encode("utf-8")
+    _gh_put(f"_persistence/{name}.json", data, f"save {name}")
+
+def _gh_load_json(name, default=None):
+    """GitHub에서 JSON 파일을 로드."""
+    content, _ = _gh_get(f"_persistence/{name}.json")
+    if content:
+        try:
+            return json.loads(content.decode("utf-8"))
+        except Exception:
+            pass
+    return default
+
+def _gh_save_df(name, df):
+    """DataFrame을 parquet으로 GitHub에 저장."""
+    if df is None:
+        return
+    buf = io.BytesIO()
+    df.to_parquet(buf, index=False)
+    _gh_put(f"_persistence/{name}.parquet", buf.getvalue(), f"save {name}")
+
+def _gh_load_df(name):
+    """GitHub에서 parquet DataFrame을 로드."""
+    content, _ = _gh_get(f"_persistence/{name}.parquet")
+    if content:
+        try:
+            return pd.read_parquet(io.BytesIO(content))
+        except Exception:
+            pass
+    return None
+
 def save_all_cache():
-    """현재 session_state의 주요 데이터를 디스크에 저장."""
+    """현재 session_state의 주요 데이터를 디스크 + GitHub에 저장."""
+    # 로컬 디스크
     _save_pickle("naver_data", st.session_state.naver_data)
     _save_pickle("google_data", st.session_state.google_data)
     _save_pickle("naver_mapping_rules", st.session_state.naver_mapping_rules)
@@ -64,6 +148,52 @@ def save_all_cache():
     _save_pickle("campaign_categories", st.session_state.campaign_categories)
     _save_pickle("budgets", st.session_state.budgets)
     _save_pickle("device_ratios", st.session_state.device_ratios)
+    # GitHub (Cloud 영속성)
+    if _gh_headers():
+        try:
+            _gh_save_json("config", {
+                "campaign_categories": st.session_state.campaign_categories,
+                "budgets": st.session_state.budgets,
+                "device_ratios": st.session_state.device_ratios,
+                "naver_mapping_rules": st.session_state.naver_mapping_rules.to_dict(orient="records"),
+                "google_mapping_rules": st.session_state.google_mapping_rules.to_dict(orient="records"),
+            })
+            _gh_save_df("naver_data", st.session_state.naver_data)
+            _gh_save_df("google_data", st.session_state.google_data)
+        except Exception:
+            pass
+
+def load_from_github():
+    """GitHub에서 데이터 복원 (로컬 캐시가 비어있을 때 사용)."""
+    if not _gh_headers():
+        return
+    try:
+        config = _gh_load_json("config")
+        if config:
+            if "campaign_categories" not in st.session_state or st.session_state.campaign_categories == ["브랜드", "신용카드", "체크카드", "대출", "보험"]:
+                st.session_state.campaign_categories = config.get("campaign_categories", st.session_state.campaign_categories)
+            if "budgets" not in st.session_state or not st.session_state.budgets:
+                st.session_state.budgets = config.get("budgets", {})
+            if "device_ratios" not in st.session_state or not st.session_state.device_ratios:
+                st.session_state.device_ratios = config.get("device_ratios", {})
+            nr = config.get("naver_mapping_rules")
+            if nr and ("naver_mapping_rules" not in st.session_state or st.session_state.get("_naver_rules_default", False)):
+                st.session_state.naver_mapping_rules = pd.DataFrame(nr)
+                st.session_state._naver_rules_default = False
+            gr = config.get("google_mapping_rules")
+            if gr and ("google_mapping_rules" not in st.session_state or st.session_state.get("_google_rules_default", False)):
+                st.session_state.google_mapping_rules = pd.DataFrame(gr)
+                st.session_state._google_rules_default = False
+        if st.session_state.get("naver_data") is None:
+            ndf = _gh_load_df("naver_data")
+            if ndf is not None:
+                st.session_state.naver_data = ndf
+        if st.session_state.get("google_data") is None:
+            gdf = _gh_load_df("google_data")
+            if gdf is not None:
+                st.session_state.google_data = gdf
+    except Exception:
+        pass
 
 # ──────────────────────────────────────────────
 # session_state 초기화 (캐시에서 복원)
@@ -104,6 +234,7 @@ if "naver_mapping_rules" not in st.session_state:
             {"캠페인_포함": "",            "광고그룹_포함": "대출",          "캠페인구분": "대출"},
             {"캠페인_포함": "",            "광고그룹_포함": "신한카드",      "캠페인구분": "브랜드"},
         ])
+        st.session_state._naver_rules_default = True
 
 if "google_mapping_rules" not in st.session_state:
     _cached_google = _load_pickle("google_mapping_rules", None)
@@ -118,6 +249,12 @@ if "google_mapping_rules" not in st.session_state:
             {"캠페인_포함": "소상공인",     "광고그룹_포함": "",              "캠페인구분": "브랜드"},
             {"캠페인_포함": "신한카드법인", "광고그룹_포함": "",              "캠페인구분": "브랜드"},
         ])
+        st.session_state._google_rules_default = True
+
+# ── GitHub에서 복원 (Cloud 리부트 후 첫 로드) ──
+if "_gh_restored" not in st.session_state:
+    load_from_github()
+    st.session_state._gh_restored = True
 
 # ──────────────────────────────────────────────
 # 유틸리티 함수
