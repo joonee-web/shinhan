@@ -95,24 +95,30 @@ def _gh_get(path):
     return None, None
 
 def _gh_put(path, content_bytes, message="auto-save"):
-    """GitHub에 파일을 생성/업데이트한다."""
+    """GitHub에 파일을 생성/업데이트한다. 409 충돌 시 재시도."""
     if not _GH_ENABLED:
         return False, "GitHub 미연결"
     url = f"https://api.github.com/repos/{_GH_REPO}/contents/{path}"
-    try:
-        r = requests.get(url, headers=_GH_HEADERS, timeout=15)
-        body = {
-            "message": message,
-            "content": base64.b64encode(content_bytes).decode(),
-        }
-        if r.status_code == 200:
-            body["sha"] = r.json()["sha"]
-        resp = requests.put(url, headers=_GH_HEADERS, json=body, timeout=60)
-        if resp.status_code in (200, 201):
-            return True, ""
-        return False, f"{path}: HTTP {resp.status_code} - {resp.text[:200]}"
-    except Exception as e:
-        return False, f"{path}: {e}"
+    encoded = base64.b64encode(content_bytes).decode()
+    for attempt in range(3):
+        try:
+            r = requests.get(url, headers=_GH_HEADERS, timeout=15)
+            body = {"message": message, "content": encoded}
+            if r.status_code == 200:
+                body["sha"] = r.json()["sha"]
+            resp = requests.put(url, headers=_GH_HEADERS, json=body, timeout=60)
+            if resp.status_code in (200, 201):
+                return True, ""
+            if resp.status_code == 409 and attempt < 2:
+                time.sleep(1)
+                continue
+            return False, f"{path}: HTTP {resp.status_code} - {resp.text[:200]}"
+        except Exception as e:
+            if attempt < 2:
+                time.sleep(1)
+                continue
+            return False, f"{path}: {e}"
+    return False, f"{path}: 재시도 초과"
 
 def _gh_save_data(name, obj):
     """pickle+base64로 GitHub에 저장."""
