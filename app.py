@@ -59,29 +59,23 @@ def _load_pickle(name, default=None):
 # ──────────────────────────────────────────────
 # GitHub API 영속성 (Cloud 리부트 대응)
 # ──────────────────────────────────────────────
-def _gh_headers():
-    """GitHub API 인증 헤더. secrets에 GITHUB_TOKEN이 없으면 None."""
-    try:
-        token = st.secrets.get("GITHUB_TOKEN", "")
-    except Exception:
-        return None
-    if not token:
-        return None
-    return {"Authorization": f"token {token}", "Accept": "application/vnd.github+json"}
+_GH_TOKEN = None
+_GH_REPO = "joonee-web/shinhan"
+try:
+    _GH_TOKEN = st.secrets["GITHUB_TOKEN"]
+    _GH_REPO = st.secrets.get("GITHUB_REPO", _GH_REPO) if hasattr(st.secrets, "get") else _GH_REPO
+except Exception:
+    pass
 
-def _gh_repo():
-    try:
-        return st.secrets.get("GITHUB_REPO", "joonee-web/shinhan")
-    except Exception:
-        return "joonee-web/shinhan"
+_GH_ENABLED = bool(_GH_TOKEN)
+_GH_HEADERS = {"Authorization": f"token {_GH_TOKEN}", "Accept": "application/vnd.github+json"} if _GH_ENABLED else {}
 
 def _gh_get(path):
     """GitHub에서 파일 내용과 SHA를 가져온다."""
-    headers = _gh_headers()
-    if not headers:
+    if not _GH_ENABLED:
         return None, None
-    url = f"https://api.github.com/repos/{_gh_repo()}/contents/{path}"
-    r = requests.get(url, headers=headers)
+    url = f"https://api.github.com/repos/{_GH_REPO}/contents/{path}"
+    r = requests.get(url, headers=_GH_HEADERS, timeout=15)
     if r.status_code == 200:
         data = r.json()
         content = base64.b64decode(data["content"])
@@ -90,52 +84,29 @@ def _gh_get(path):
 
 def _gh_put(path, content_bytes, message="auto-save"):
     """GitHub에 파일을 생성/업데이트한다."""
-    headers = _gh_headers()
-    if not headers:
+    if not _GH_ENABLED:
         return False
-    url = f"https://api.github.com/repos/{_gh_repo()}/contents/{path}"
-    # 기존 파일 SHA 가져오기 (업데이트용)
-    r = requests.get(url, headers=headers)
+    url = f"https://api.github.com/repos/{_GH_REPO}/contents/{path}"
+    r = requests.get(url, headers=_GH_HEADERS, timeout=15)
     body = {
         "message": message,
         "content": base64.b64encode(content_bytes).decode(),
     }
     if r.status_code == 200:
         body["sha"] = r.json()["sha"]
-    resp = requests.put(url, headers=headers, json=body)
+    resp = requests.put(url, headers=_GH_HEADERS, json=body, timeout=30)
     return resp.status_code in (200, 201)
 
-def _gh_save_json(name, obj):
-    """JSON 직렬화 가능한 객체를 GitHub에 저장."""
-    data = json.dumps(obj, ensure_ascii=False, default=str).encode("utf-8")
-    _gh_put(f"_persistence/{name}.json", data, f"save {name}")
+def _gh_save_data(name, obj):
+    """pickle+base64로 GitHub에 저장."""
+    data = pickle.dumps(obj)
+    return _gh_put(f"_persistence/{name}.pkl", data, f"save {name}")
 
-def _gh_load_json(name, default=None):
-    """GitHub에서 JSON 파일을 로드."""
-    content, _ = _gh_get(f"_persistence/{name}.json")
+def _gh_load_data(name):
+    """GitHub에서 pickle 데이터를 로드."""
+    content, _ = _gh_get(f"_persistence/{name}.pkl")
     if content:
-        try:
-            return json.loads(content.decode("utf-8"))
-        except Exception:
-            pass
-    return default
-
-def _gh_save_df(name, df):
-    """DataFrame을 parquet으로 GitHub에 저장."""
-    if df is None:
-        return
-    buf = io.BytesIO()
-    df.to_parquet(buf, index=False)
-    _gh_put(f"_persistence/{name}.parquet", buf.getvalue(), f"save {name}")
-
-def _gh_load_df(name):
-    """GitHub에서 parquet DataFrame을 로드."""
-    content, _ = _gh_get(f"_persistence/{name}.parquet")
-    if content:
-        try:
-            return pd.read_parquet(io.BytesIO(content))
-        except Exception:
-            pass
+        return pickle.loads(content)
     return None
 
 def save_all_cache():
@@ -149,51 +120,33 @@ def save_all_cache():
     _save_pickle("budgets", st.session_state.budgets)
     _save_pickle("device_ratios", st.session_state.device_ratios)
     # GitHub (Cloud 영속성)
-    if _gh_headers():
-        try:
-            _gh_save_json("config", {
-                "campaign_categories": st.session_state.campaign_categories,
-                "budgets": st.session_state.budgets,
-                "device_ratios": st.session_state.device_ratios,
-                "naver_mapping_rules": st.session_state.naver_mapping_rules.to_dict(orient="records"),
-                "google_mapping_rules": st.session_state.google_mapping_rules.to_dict(orient="records"),
-            })
-            _gh_save_df("naver_data", st.session_state.naver_data)
-            _gh_save_df("google_data", st.session_state.google_data)
-        except Exception:
-            pass
+    if _GH_ENABLED:
+        gh_ok = True
+        for key in ["naver_data", "google_data", "naver_mapping_rules",
+                     "google_mapping_rules", "campaign_categories", "budgets", "device_ratios"]:
+            val = getattr(st.session_state, key, None)
+            if val is not None:
+                if not _gh_save_data(key, val):
+                    gh_ok = False
+        if gh_ok:
+            st.toast("☁️ GitHub 저장 완료")
+        else:
+            st.toast("⚠️ GitHub 저장 일부 실패", icon="⚠️")
 
 def load_from_github():
-    """GitHub에서 데이터 복원 (로컬 캐시가 비어있을 때 사용)."""
-    if not _gh_headers():
+    """GitHub에서 데이터 복원 (Cloud 리부트 후 첫 로드)."""
+    if not _GH_ENABLED:
         return
-    try:
-        config = _gh_load_json("config")
-        if config:
-            if "campaign_categories" not in st.session_state or st.session_state.campaign_categories == ["브랜드", "신용카드", "체크카드", "대출", "보험"]:
-                st.session_state.campaign_categories = config.get("campaign_categories", st.session_state.campaign_categories)
-            if "budgets" not in st.session_state or not st.session_state.budgets:
-                st.session_state.budgets = config.get("budgets", {})
-            if "device_ratios" not in st.session_state or not st.session_state.device_ratios:
-                st.session_state.device_ratios = config.get("device_ratios", {})
-            nr = config.get("naver_mapping_rules")
-            if nr and ("naver_mapping_rules" not in st.session_state or st.session_state.get("_naver_rules_default", False)):
-                st.session_state.naver_mapping_rules = pd.DataFrame(nr)
-                st.session_state._naver_rules_default = False
-            gr = config.get("google_mapping_rules")
-            if gr and ("google_mapping_rules" not in st.session_state or st.session_state.get("_google_rules_default", False)):
-                st.session_state.google_mapping_rules = pd.DataFrame(gr)
-                st.session_state._google_rules_default = False
-        if st.session_state.get("naver_data") is None:
-            ndf = _gh_load_df("naver_data")
-            if ndf is not None:
-                st.session_state.naver_data = ndf
-        if st.session_state.get("google_data") is None:
-            gdf = _gh_load_df("google_data")
-            if gdf is not None:
-                st.session_state.google_data = gdf
-    except Exception:
-        pass
+    restored = []
+    for key in ["campaign_categories", "budgets", "device_ratios",
+                 "naver_mapping_rules", "google_mapping_rules",
+                 "naver_data", "google_data"]:
+        val = _gh_load_data(key)
+        if val is not None:
+            st.session_state[key] = val
+            restored.append(key)
+    if restored:
+        st.toast(f"☁️ GitHub에서 {len(restored)}개 항목 복원 완료")
 
 # ──────────────────────────────────────────────
 # session_state 초기화 (캐시에서 복원)
@@ -495,6 +448,12 @@ def prepare_google_data(df, mapping_rules_json):
 # 사이드바
 # ──────────────────────────────────────────────
 with st.sidebar:
+    # ── GitHub 연결 상태 ──
+    if _GH_ENABLED:
+        st.caption("☁️ GitHub 자동 저장: **활성**")
+    else:
+        st.caption("💾 로컬 저장 모드 (GitHub 미연결)")
+
     # ── 캠페인 관리 섹션 ──
     st.header("📂 캠페인 관리")
 
