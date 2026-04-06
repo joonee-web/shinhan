@@ -71,15 +71,27 @@ _GH_ENABLED = bool(_GH_TOKEN)
 _GH_HEADERS = {"Authorization": f"token {_GH_TOKEN}", "Accept": "application/vnd.github+json"} if _GH_ENABLED else {}
 
 def _gh_get(path):
-    """GitHub에서 파일 내용과 SHA를 가져온다."""
+    """GitHub에서 파일 내용과 SHA를 가져온다. 1MB 초과 파일은 download_url 사용."""
     if not _GH_ENABLED:
         return None, None
     url = f"https://api.github.com/repos/{_GH_REPO}/contents/{path}"
-    r = requests.get(url, headers=_GH_HEADERS, timeout=15)
-    if r.status_code == 200:
+    try:
+        r = requests.get(url, headers=_GH_HEADERS, timeout=15)
+        if r.status_code != 200:
+            return None, None
         data = r.json()
-        content = base64.b64decode(data["content"])
-        return content, data["sha"]
+        sha = data.get("sha")
+        # 1MB 이하: content 필드에 base64 데이터 포함
+        if data.get("content"):
+            return base64.b64decode(data["content"]), sha
+        # 1MB 초과: download_url로 직접 다운로드
+        dl_url = data.get("download_url")
+        if dl_url:
+            dl = requests.get(dl_url, headers=_GH_HEADERS, timeout=60)
+            if dl.status_code == 200:
+                return dl.content, sha
+    except Exception:
+        pass
     return None, None
 
 def _gh_put(path, content_bytes, message="auto-save"):
@@ -150,15 +162,23 @@ def load_from_github():
     if not _GH_ENABLED:
         return
     restored = []
+    failed = []
     for key in ["campaign_categories", "budgets", "device_ratios",
                  "naver_mapping_rules", "google_mapping_rules",
                  "naver_data", "google_data"]:
-        val = _gh_load_data(key)
-        if val is not None:
-            st.session_state[key] = val
-            restored.append(key)
+        try:
+            val = _gh_load_data(key)
+            if val is not None:
+                st.session_state[key] = val
+                restored.append(key)
+            else:
+                failed.append(key)
+        except Exception as e:
+            failed.append(f"{key}({e})")
     if restored:
-        st.toast(f"☁️ GitHub에서 {len(restored)}개 항목 복원 완료")
+        st.toast(f"☁️ GitHub 복원 완료: {', '.join(restored)}")
+    if failed:
+        st.toast(f"⚠️ GitHub 복원 실패: {', '.join(failed)}", icon="⚠️")
 
 # ──────────────────────────────────────────────
 # session_state 초기화 (캐시에서 복원)
