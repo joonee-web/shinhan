@@ -440,12 +440,14 @@ def prepare_naver_data(df, mapping_rules_json):
     df["디바이스"] = map_device_vec(df["캠페인"])
 
     df["_date"] = pd.to_datetime(df["일별"], errors="coerce")
-    # 월~일 기준 주차: 해당 월 첫 번째 월요일 기준으로 주차 산정
+    # 월~일 기준 주차: 해당 월 첫 번째 월요일 기준으로 주차 산정 (첫 월요일 전 = W0)
     _first_day = df["_date"].dt.to_period("M").dt.to_timestamp()
-    _first_mon_offset = (7 - _first_day.dt.dayofweek) % 7  # 첫 번째 월요일까지 남은 일수 (월요일이면 0)
+    _first_mon_offset = (7 - _first_day.dt.dayofweek) % 7
     _first_mon = _first_day + pd.to_timedelta(_first_mon_offset, unit="D")
     _diff = (df["_date"] - _first_mon).dt.days
-    df["주차"] = "W" + (_diff.clip(lower=0) // 7 + 1).astype("Int64").astype(str)
+    _wn = _diff // 7 + 1
+    _wn = _wn.where(_diff >= 0, 0)  # 첫 월요일 전 날짜는 W0
+    df["주차"] = "W" + _wn.astype("Int64").astype(str)
 
     df["노출수"] = pd.to_numeric(df["노출수"], errors="coerce").fillna(0).astype(int)
     df["클릭수"] = pd.to_numeric(df["클릭수"], errors="coerce").fillna(0).astype(int)
@@ -472,12 +474,14 @@ def prepare_google_data(df, mapping_rules_json):
     df["디바이스"] = "통합"
 
     df["_date"] = pd.to_datetime(df["일"], errors="coerce")
-    # 월~일 기준 주차: 해당 월 첫 번째 월요일 기준으로 주차 산정
+    # 월~일 기준 주차: 해당 월 첫 번째 월요일 기준으로 주차 산정 (첫 월요일 전 = W0)
     _first_day = df["_date"].dt.to_period("M").dt.to_timestamp()
     _first_mon_offset = (7 - _first_day.dt.dayofweek) % 7
     _first_mon = _first_day + pd.to_timedelta(_first_mon_offset, unit="D")
     _diff = (df["_date"] - _first_mon).dt.days
-    df["주차"] = "W" + (_diff.clip(lower=0) // 7 + 1).astype("Int64").astype(str)
+    _wn = _diff // 7 + 1
+    _wn = _wn.where(_diff >= 0, 0)
+    df["주차"] = "W" + _wn.astype("Int64").astype(str)
 
     df["노출수"] = pd.to_numeric(df["노출수"], errors="coerce").fillna(0).astype(int)
     df["클릭수"] = pd.to_numeric(df["클릭수"], errors="coerce").fillna(0).astype(int)
