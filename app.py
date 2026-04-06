@@ -426,8 +426,10 @@ def check_naver_ad_exposure(keyword, device="PC"):
     return "요청오류"
 
 
+_PREP_VERSION = 2  # 주차 로직 변경 시 버전 올려 캐시 무효화
+
 @st.cache_data(show_spinner="네이버 데이터 처리 중...")
-def prepare_naver_data(df, mapping_rules_json):
+def prepare_naver_data(df, mapping_rules_json, _version=_PREP_VERSION):
     """네이버 SA 데이터 정제: 매핑·디바이스·주차·비용 컬럼 추가."""
     df = df.copy()
     mapping_rules = pd.read_json(io.StringIO(mapping_rules_json))
@@ -461,7 +463,7 @@ def prepare_naver_data(df, mapping_rules_json):
 
 
 @st.cache_data(show_spinner="구글 데이터 처리 중...")
-def prepare_google_data(df, mapping_rules_json):
+def prepare_google_data(df, mapping_rules_json, _version=_PREP_VERSION):
     """구글 SA 데이터 정제: 매핑·주차·비용 컬럼 추가."""
     df = df.copy()
     mapping_rules = pd.read_json(io.StringIO(mapping_rules_json))
