@@ -1641,6 +1641,31 @@ elif menu_key == "경쟁사 쿼리 추이":
             f"이전 30일: {start_prev.strftime('%m/%d')}~{end_prev.strftime('%m/%d')}"
         )
 
+        # ── 카드사별 비교 테이블 ──
+        comp_rows = []
+        for card in card_list:
+            r_val = int(recent_agg.get(card, 0))
+            p_val = int(prev_agg.get(card, 0))
+            diff = r_val - p_val
+            pct = (diff / p_val * 100) if p_val > 0 else None
+            comp_rows.append({
+                "카드사": card,
+                f"최근 30일 ({start_recent.strftime('%m/%d')}~{end_recent.strftime('%m/%d')})": r_val,
+                f"이전 30일 ({start_prev.strftime('%m/%d')}~{end_prev.strftime('%m/%d')})": p_val,
+                "증감": diff,
+                "증감률(%)": pct,
+            })
+        comp_df = pd.DataFrame(comp_rows).set_index("카드사")
+        st.dataframe(
+            comp_df.style.format({
+                comp_df.columns[0]: "{:,.0f}",
+                comp_df.columns[1]: "{:,.0f}",
+                "증감": "{:+,.0f}",
+                "증감률(%)": "{:+.1f}%",
+            }, na_rep="—"),
+            width="stretch",
+        )
+
         st.divider()
 
         # ── 라인 차트 ──
