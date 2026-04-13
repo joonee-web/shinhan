@@ -745,6 +745,37 @@ if menu_key == "요약 및 예산":
 
         st.divider()
 
+        # ── 매체·주차·캠페인구분별 노출/클릭/비용 비교 ──
+        st.subheader(f"📊 매체·주차·캠페인구분별 성과 비교 ({sel_year}년 {sel_month}월)")
+        perf_data = combined[combined["캠페인구분"] != "기타"].copy()
+        if not perf_data.empty:
+            perf_pivot = perf_data.pivot_table(
+                index=["매체", "캠페인구분"],
+                columns="_week_num",
+                values=["노출수", "클릭수", "비용"],
+                aggfunc="sum",
+                fill_value=0,
+            )
+            week_cols_sorted = sorted(perf_pivot.columns.get_level_values(1).unique())
+
+            for metric_name, fmt_str in [("노출수", "{:,.0f}"), ("클릭수", "{:,.0f}"), ("비용", "₩{:,.0f}")]:
+                st.markdown(f"##### {metric_name}")
+                metric_df = perf_pivot[metric_name].copy() if metric_name in perf_pivot.columns.get_level_values(0) else pd.DataFrame()
+                if not metric_df.empty:
+                    metric_df.columns = [str(int(c)) for c in metric_df.columns]
+                    metric_df["총계"] = metric_df.sum(axis=1)
+                    grand = metric_df.sum(numeric_only=True)
+                    grand.name = ("합계", "")
+                    metric_display = pd.concat([metric_df, grand.to_frame().T])
+                    fmt = {col: fmt_str for col in metric_display.columns}
+                    st.dataframe(
+                        metric_display.style.format(fmt, na_rep=""),
+                        use_container_width=True,
+                        height=min(len(metric_display) * 38 + 50, 600),
+                    )
+
+        st.divider()
+
         # ── 예산 입력 섹션 ──
         st.subheader(f"💰 매체별 · 캠페인 구분별 월 예산 ({ym_key})")
 
