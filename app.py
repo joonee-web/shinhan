@@ -749,30 +749,50 @@ if menu_key == "요약 및 예산":
         st.subheader(f"📊 매체·주차·캠페인구분별 성과 비교 ({sel_year}년 {sel_month}월)")
         perf_data = combined[combined["캠페인구분"] != "기타"].copy()
         if not perf_data.empty:
-            perf_pivot = perf_data.pivot_table(
-                index=["매체", "캠페인구분"],
-                columns="_week_num",
-                values=["노출수", "클릭수", "비용"],
-                aggfunc="sum",
-                fill_value=0,
+            perf_agg = perf_data.groupby(["매체", "캠페인구분", "_week_num"]).agg(
+                노출수=("노출수", "sum"), 클릭수=("클릭수", "sum"), 비용=("비용", "sum"),
+            ).reset_index()
+            weeks_sorted = sorted(perf_agg["_week_num"].unique())
+            rows = []
+            for (media, cat), grp in perf_agg.groupby(["매체", "캠페인구분"]):
+                row = {"매체": media, "캠페인구분": cat}
+                tot_imp, tot_clk, tot_cost = 0, 0, 0
+                for w in weeks_sorted:
+                    wdata = grp[grp["_week_num"] == w]
+                    imp = int(wdata["노출수"].sum()) if not wdata.empty else 0
+                    clk = int(wdata["클릭수"].sum()) if not wdata.empty else 0
+                    cost = int(wdata["비용"].sum()) if not wdata.empty else 0
+                    wl = str(int(w))
+                    row[f"W{wl}_노출"] = imp
+                    row[f"W{wl}_클릭"] = clk
+                    row[f"W{wl}_비용"] = cost
+                    tot_imp += imp; tot_clk += clk; tot_cost += cost
+                row["총계_노출"] = tot_imp
+                row["총계_클릭"] = tot_clk
+                row["총계_비용"] = tot_cost
+                rows.append(row)
+            perf_df = pd.DataFrame(rows).set_index(["매체", "캠페인구분"])
+            # 멀티레벨 컬럼으로 변환
+            new_cols = []
+            for c in perf_df.columns:
+                parts = c.split("_", 1)
+                new_cols.append((parts[0], parts[1]))
+            perf_df.columns = pd.MultiIndex.from_tuples(new_cols, names=["주차", "지표"])
+            # 합계 행
+            grand = perf_df.sum(numeric_only=True)
+            grand.name = ("합계", "")
+            perf_display = pd.concat([perf_df, grand.to_frame().T])
+            fmt = {}
+            for col in perf_display.columns:
+                if "비용" in col[1]:
+                    fmt[col] = "₩{:,.0f}"
+                else:
+                    fmt[col] = "{:,.0f}"
+            st.dataframe(
+                perf_display.style.format(fmt, na_rep=""),
+                use_container_width=True,
+                height=min(len(perf_display) * 38 + 50, 600),
             )
-            week_cols_sorted = sorted(perf_pivot.columns.get_level_values(1).unique())
-
-            for metric_name, fmt_str in [("노출수", "{:,.0f}"), ("클릭수", "{:,.0f}"), ("비용", "₩{:,.0f}")]:
-                st.markdown(f"##### {metric_name}")
-                metric_df = perf_pivot[metric_name].copy() if metric_name in perf_pivot.columns.get_level_values(0) else pd.DataFrame()
-                if not metric_df.empty:
-                    metric_df.columns = [str(int(c)) for c in metric_df.columns]
-                    metric_df["총계"] = metric_df.sum(axis=1)
-                    grand = metric_df.sum(numeric_only=True)
-                    grand.name = ("합계", "")
-                    metric_display = pd.concat([metric_df, grand.to_frame().T])
-                    fmt = {col: fmt_str for col in metric_display.columns}
-                    st.dataframe(
-                        metric_display.style.format(fmt, na_rep=""),
-                        use_container_width=True,
-                        height=min(len(metric_display) * 38 + 50, 600),
-                    )
 
         st.divider()
 
