@@ -1407,9 +1407,8 @@ elif menu_key == "급상승·급하락 키워드":
             surge_data.loc[google_mask, "키워드"].str.replace(r"[\[\]]", "", regex=True).str.strip()
         )
 
-        # 캠페인 필터: '0.' 포함, 키워드 '신한카드' 제외
-        surge_data = surge_data[surge_data["캠페인"].str.contains("0.", na=False)]
-        surge_data = surge_data[surge_data["키워드"] != "신한카드"]
+        # 캠페인 구분 매핑 필터: 매핑된 키워드만 분석 (기타 제외)
+        surge_data = surge_data[surge_data["캠페인구분"] != "기타"]
 
         # 주차 번호 추출
         surge_data["_wn"] = surge_data["주차"].str.extract(r"(\d+)").astype("Int64")[0]
